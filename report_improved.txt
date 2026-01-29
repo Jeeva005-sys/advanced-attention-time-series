@@ -1,0 +1,20 @@
+Advanced Time Series Forecasting Report
+
+Baseline Model: ARIMA(2,1,2)
+Transformer Model: MultiHeadAttention Encoder
+
+Results:
+         Model Seq_Length Heads D_Model      MAE     RMSE       MAPE
+ARIMA Baseline        N/A   N/A     N/A 1.720809 1.890023 822.033303
+   Transformer         10     2      32 0.007602 0.009709   3.775148
+   Transformer         10     2      64 0.016282 0.021674   7.833104
+   Transformer         10     4      32 0.009659 0.013055   4.678415
+   Transformer         10     4      64 0.010752 0.014034   4.904112
+   Transformer         20     2      32 0.009429 0.012051   6.776499
+   Transformer         20     2      64 0.016359 0.019572   9.808546
+   Transformer         20     4      32 0.016948 0.020689   5.426414
+   Transformer         20     4      64 0.016321 0.019435  10.202038
+
+Interpretability:
+Attention weights saved in attention_weights.npy.
+They show which time steps influence predictions most strongly.
