@@ -1,139 +1,140 @@
+"""
+Advanced Time Series Forecasting using ARIMA and Transformer Attention Model
+
+This script:
+1. Generates synthetic multivariate time-series data (5000 samples, 3 features)
+2. Trains a baseline ARIMA model
+3. Trains a Transformer-based attention model
+4. Performs hyperparameter grid search
+5. Evaluates models using MAE, RMSE, and MAPE
+6. Saves results to results.csv
+7. Saves attention weights for interpretability
+"""
+
 import numpy as np
 import pandas as pd
 import tensorflow as tf
-from tensorflow.keras.models import Model, Sequential
-from tensorflow.keras.layers import LSTM, Dense, Input, Attention
-from tensorflow.keras.optimizers import Adam
+from tensorflow.keras.layers import Input, Dense, LayerNormalization, MultiHeadAttention, GlobalAveragePooling1D
+from tensorflow.keras.models import Model
 from sklearn.metrics import mean_absolute_error, mean_squared_error
-from sklearn.preprocessing import MinMaxScaler
+from statsmodels.tsa.arima.model import ARIMA
 import itertools
-import os
 
-# ======================
-# 1. DATA GENERATION (5000 samples, multivariate)
-# ======================
-np.random.seed(42)
+# ===================== CONFIG =====================
+SEQ_LENGTHS = [10, 20]
+HEADS = [2, 4]
+D_MODELS = [32, 64]
+EPOCHS = 30
+BATCH_SIZE = 32
+FEATURES = 3
+DATA_POINTS = 5000
 
-n_samples = 5000
-time = np.arange(n_samples)
-
-f1 = np.sin(0.01 * time)
-f2 = np.cos(0.015 * time)
-f3 = np.sin(0.02 * time) + np.random.normal(0, 0.1, n_samples)
-
-target = f1 + f2 + f3
-
-data = pd.DataFrame({
-    "f1": f1,
-    "f2": f2,
-    "f3": f3,
-    "target": target
-})
-
-data.to_csv("dataset.csv", index=False)
-
-# ======================
-# 2. PREPROCESSING
-# ======================
-scaler = MinMaxScaler()
-scaled = scaler.fit_transform(data)
+# ===================== DATA GENERATION =====================
+def generate_data():
+    t = np.arange(DATA_POINTS)
+    f1 = np.sin(0.02 * t)
+    f2 = np.cos(0.015 * t)
+    f3 = np.sin(0.01 * t) + np.random.normal(0, 0.1, DATA_POINTS)
+    data = np.stack([f1, f2, f3], axis=1)
+    return data
 
 def create_sequences(data, seq_len):
     X, y = [], []
     for i in range(len(data) - seq_len):
-        X.append(data[i:i+seq_len, :-1])
-        y.append(data[i+seq_len, -1])
+        X.append(data[i:i+seq_len])
+        y.append(data[i+seq_len, 0])
     return np.array(X), np.array(y)
 
-# ======================
-# 3. MODELS
-# ======================
-def build_baseline_lstm(seq_len, n_features, units, lr):
-    model = Sequential([
-        LSTM(units, input_shape=(seq_len, n_features)),
-        Dense(1)
-    ])
-    model.compile(optimizer=Adam(lr), loss="mse")
-    return model
+# ===================== METRICS =====================
+def mape(y_true, y_pred):
+    return np.mean(np.abs((y_true - y_pred) / y_true)) * 100
 
-def build_attention_model(seq_len, n_features, units, lr):
-    inputs = Input(shape=(seq_len, n_features))
-    encoder = LSTM(units, return_sequences=True)(inputs)
-    decoder = LSTM(units, return_sequences=True)(encoder)
-    attention = Attention()([decoder, encoder])
-    output = Dense(1)(attention[:, -1, :])
-    model = Model(inputs, output)
-    model.compile(optimizer=Adam(lr), loss="mse")
-    return model
+# ===================== TRANSFORMER MODEL =====================
+def build_transformer(seq_len, features, heads, d_model):
+    inp = Input(shape=(seq_len, features))
+    x = Dense(d_model)(inp)
 
-# ======================
-# 4. METRICS
-# ======================
-def compute_metrics(y_true, y_pred):
-    mae = mean_absolute_error(y_true, y_pred)
-    rmse = np.sqrt(mean_squared_error(y_true, y_pred))
-    mape = np.mean(np.abs((y_true - y_pred) / y_true)) * 100
-    return mae, rmse, mape
+    mha = MultiHeadAttention(num_heads=heads, key_dim=d_model)
+    attn_output = mha(x, x)
 
-# ======================
-# 5. HYPERPARAMETER GRID
-# ======================
-seq_lengths = [20, 30]
-units_list = [32, 64]
-learning_rates = [0.001, 0.0005]
-splits = [0.7, 0.8]
+    x = LayerNormalization()(x + attn_output)
+    x = Dense(64, activation='relu')(x)
 
+    # Proper Keras pooling instead of tf.reduce_mean
+    x = GlobalAveragePooling1D()(x)
+
+    out = Dense(1)(x)
+
+    model = Model(inp, out)
+    model.compile(optimizer='adam', loss='mse')
+
+    return model, mha
+
+# ===================== MAIN =====================
+data = generate_data()
 results = []
 
-# ======================
-# 6. GRID SEARCH
-# ======================
-for seq_len, units, lr, split in itertools.product(seq_lengths, units_list, learning_rates, splits):
-    print(f"\nRunning experiment: seq_len={seq_len}, units={units}, lr={lr}, split={split}")
+# ---------- BASELINE ARIMA ----------
+train = data[:4000, 0]
+test = data[4000:, 0]
 
-    X, y = create_sequences(scaled, seq_len)
-    split_idx = int(len(X) * split)
+arima_model = ARIMA(train, order=(2,1,2))
+arima_fit = arima_model.fit()
+pred_arima = arima_fit.forecast(len(test))
 
-    X_train, X_test = X[:split_idx], X[split_idx:]
-    y_train, y_test = y[:split_idx], y[split_idx:]
+mae = mean_absolute_error(test, pred_arima)
+rmse = np.sqrt(mean_squared_error(test, pred_arima))
+mape_val = mape(test, pred_arima)
 
-    n_features = X.shape[2]
+results.append(["ARIMA Baseline", "N/A", "N/A", "N/A", mae, rmse, mape_val])
 
-    # ---- Baseline LSTM ----
-    baseline = build_baseline_lstm(seq_len, n_features, units, lr)
-    baseline.fit(X_train, y_train, epochs=5, batch_size=32, verbose=0)
+# ---------- TRANSFORMER GRID SEARCH ----------
+attention_weights_store = None
 
-    y_pred_base = baseline.predict(X_test)
-    mae_b, rmse_b, mape_b = compute_metrics(y_test, y_pred_base)
+for seq_len, heads, d_model in itertools.product(SEQ_LENGTHS, HEADS, D_MODELS):
 
-    results.append(["Baseline_LSTM", seq_len, units, lr, split, mae_b, rmse_b, mape_b])
+    X, y = create_sequences(data, seq_len)
+    split = int(len(X) * 0.8)
+    X_train, X_test = X[:split], X[split:]
+    y_train, y_test = y[:split], y[split:]
 
-    # ---- Attention Model ----
-    att_model = build_attention_model(seq_len, n_features, units, lr)
-    att_model.fit(X_train, y_train, epochs=5, batch_size=32, verbose=0)
+    model, mha = build_transformer(seq_len, FEATURES, heads, d_model)
 
-    y_pred_att = att_model.predict(X_test)
-    mae_a, rmse_a, mape_a = compute_metrics(y_test, y_pred_att)
+    model.fit(
+        X_train, y_train,
+        epochs=EPOCHS,
+        batch_size=BATCH_SIZE,
+        verbose=0
+    )
 
-    results.append(["Attention_LSTM", seq_len, units, lr, split, mae_a, rmse_a, mape_a])
+    preds = model.predict(X_test)
 
-    # Save attention weights from last run
-    attention_layer = att_model.layers[-2]
-    weights = attention_layer.get_weights()
-    np.save("attention_weights.npy", weights)
+    mae = mean_absolute_error(y_test, preds)
+    rmse = np.sqrt(mean_squared_error(y_test, preds))
+    mape_val = mape(y_test, preds.flatten())
 
-# ======================
-# 7. SAVE RESULTS
-# ======================
-results_df = pd.DataFrame(results, columns=[
-    "model_type", "seq_len", "units", "learning_rate", "train_split",
-    "MAE", "RMSE", "MAPE"
-])
+    results.append(["Transformer", seq_len, heads, d_model, mae, rmse, mape_val])
 
-results_df.to_csv("results.csv", index=False)
+    attention_weights_store = mha.get_weights()
 
-print("\nAll experiments completed.")
-print("Files generated:")
-print("dataset.csv")
-print("results.csv")
-print("attention_weights.npy")
+# ===================== SAVE FILES =====================
+df = pd.DataFrame(results, columns=["Model", "Seq_Length", "Heads", "D_Model", "MAE", "RMSE", "MAPE"])
+df.to_csv("results.csv", index=False)
+
+attention_weights_store = np.array(attention_weights_store, dtype=object)
+np.save("attention_weights.npy", attention_weights_store, allow_pickle=True)
+
+
+# ===================== REPORT =====================
+with open("report.txt", "w") as f:
+    f.write("Advanced Time Series Forecasting Report\n\n")
+    f.write("Baseline Model: ARIMA(2,1,2)\n")
+    f.write("Transformer Model: MultiHeadAttention Encoder\n\n")
+    f.write("Results:\n")
+    f.write(df.to_string(index=False))
+    f.write("\n\nInterpretability:\n")
+    f.write("Attention weights saved in attention_weights.npy.\n")
+    f.write("They show which time steps influence predictions most strongly.\n")
+
+print("Training completed successfully.")
+print("Files generated: results.csv, report.txt, attention_weights.npy")
