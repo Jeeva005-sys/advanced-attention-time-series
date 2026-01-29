@@ -1,46 +1,43 @@
-"""
-Advanced Time Series Forecasting with Attention Mechanism
-Author: Jeeva S
-
-Implements:
-- Multivariate time series forecasting
-- Baseline ARIMA
-- Encoder-Decoder LSTM with Attention
-- Hyperparameter Grid Search
-- Metrics: MAE, RMSE, MAPE
-"""
-
 import numpy as np
 import pandas as pd
 import tensorflow as tf
-from tensorflow.keras.layers import Input, LSTM, Dense, Attention
-from tensorflow.keras.models import Model
-from sklearn.preprocessing import MinMaxScaler
+from tensorflow.keras.models import Model, Sequential
+from tensorflow.keras.layers import LSTM, Dense, Input, Attention
+from tensorflow.keras.optimizers import Adam
 from sklearn.metrics import mean_absolute_error, mean_squared_error
+from sklearn.preprocessing import MinMaxScaler
 import itertools
+import os
 
-# =========================
-# Data Generation
-# =========================
+# ======================
+# 1. DATA GENERATION (5000 samples, multivariate)
+# ======================
 np.random.seed(42)
-time = np.arange(0, 500)
-f1 = np.sin(0.02 * time)
-f2 = np.cos(0.02 * time)
-f3 = np.random.normal(0, 0.1, len(time))
+
+n_samples = 5000
+time = np.arange(n_samples)
+
+f1 = np.sin(0.01 * time)
+f2 = np.cos(0.015 * time)
+f3 = np.sin(0.02 * time) + np.random.normal(0, 0.1, n_samples)
+
 target = f1 + f2 + f3
 
-df = pd.DataFrame({"f1": f1, "f2": f2, "f3": f3, "target": target})
-df.to_csv("dataset.csv", index=False)
+data = pd.DataFrame({
+    "f1": f1,
+    "f2": f2,
+    "f3": f3,
+    "target": target
+})
 
-# =========================
-# Scaling
-# =========================
+data.to_csv("dataset.csv", index=False)
+
+# ======================
+# 2. PREPROCESSING
+# ======================
 scaler = MinMaxScaler()
-scaled = scaler.fit_transform(df)
+scaled = scaler.fit_transform(data)
 
-# =========================
-# Sequence Builder
-# =========================
 def create_sequences(data, seq_len):
     X, y = [], []
     for i in range(len(data) - seq_len):
@@ -48,53 +45,95 @@ def create_sequences(data, seq_len):
         y.append(data[i+seq_len, -1])
     return np.array(X), np.array(y)
 
-# =========================
-# Attention Model
-# =========================
-def build_attention_model(seq_len, n_features, units):
-    encoder_inputs = Input(shape=(seq_len, n_features))
-    encoder_lstm = LSTM(units, return_sequences=True)(encoder_inputs)
-
-    decoder_inputs = LSTM(units, return_sequences=True)(encoder_lstm)
-
-    attention = Attention()([decoder_inputs, encoder_lstm])
-    dense = Dense(1)(attention[:, -1, :])
-
-    model = Model(encoder_inputs, dense)
-    model.compile(optimizer='adam', loss='mse')
+# ======================
+# 3. MODELS
+# ======================
+def build_baseline_lstm(seq_len, n_features, units, lr):
+    model = Sequential([
+        LSTM(units, input_shape=(seq_len, n_features)),
+        Dense(1)
+    ])
+    model.compile(optimizer=Adam(lr), loss="mse")
     return model
 
-# =========================
-# Hyperparameter Grid
-# =========================
-seq_lengths = [10, 20]
+def build_attention_model(seq_len, n_features, units, lr):
+    inputs = Input(shape=(seq_len, n_features))
+    encoder = LSTM(units, return_sequences=True)(inputs)
+    decoder = LSTM(units, return_sequences=True)(encoder)
+    attention = Attention()([decoder, encoder])
+    output = Dense(1)(attention[:, -1, :])
+    model = Model(inputs, output)
+    model.compile(optimizer=Adam(lr), loss="mse")
+    return model
+
+# ======================
+# 4. METRICS
+# ======================
+def compute_metrics(y_true, y_pred):
+    mae = mean_absolute_error(y_true, y_pred)
+    rmse = np.sqrt(mean_squared_error(y_true, y_pred))
+    mape = np.mean(np.abs((y_true - y_pred) / y_true)) * 100
+    return mae, rmse, mape
+
+# ======================
+# 5. HYPERPARAMETER GRID
+# ======================
+seq_lengths = [20, 30]
 units_list = [32, 64]
+learning_rates = [0.001, 0.0005]
 splits = [0.7, 0.8]
 
 results = []
 
-for seq_len, units, split in itertools.product(seq_lengths, units_list, splits):
+# ======================
+# 6. GRID SEARCH
+# ======================
+for seq_len, units, lr, split in itertools.product(seq_lengths, units_list, learning_rates, splits):
+    print(f"\nRunning experiment: seq_len={seq_len}, units={units}, lr={lr}, split={split}")
+
     X, y = create_sequences(scaled, seq_len)
-    train_size = int(len(X) * split)
+    split_idx = int(len(X) * split)
 
-    X_train, X_test = X[:train_size], X[train_size:]
-    y_train, y_test = y[:train_size], y[train_size:]
+    X_train, X_test = X[:split_idx], X[split_idx:]
+    y_train, y_test = y[:split_idx], y[split_idx:]
 
-    model = build_attention_model(seq_len, X.shape[2], units)
-    model.fit(X_train, y_train, epochs=10, batch_size=32, verbose=0)
+    n_features = X.shape[2]
 
-    preds = model.predict(X_test)
+    # ---- Baseline LSTM ----
+    baseline = build_baseline_lstm(seq_len, n_features, units, lr)
+    baseline.fit(X_train, y_train, epochs=5, batch_size=32, verbose=0)
 
-    mae = mean_absolute_error(y_test, preds)
-    rmse = np.sqrt(mean_squared_error(y_test, preds))
-    mape = np.mean(np.abs((y_test - preds.flatten()) / y_test)) * 100
+    y_pred_base = baseline.predict(X_test)
+    mae_b, rmse_b, mape_b = compute_metrics(y_test, y_pred_base)
 
-    results.append([seq_len, units, split, mae, rmse, mape])
+    results.append(["Baseline_LSTM", seq_len, units, lr, split, mae_b, rmse_b, mape_b])
 
-# =========================
-# Save Results
-# =========================
-results_df = pd.DataFrame(results, columns=["seq_len", "units", "train_split", "MAE", "RMSE", "MAPE"])
+    # ---- Attention Model ----
+    att_model = build_attention_model(seq_len, n_features, units, lr)
+    att_model.fit(X_train, y_train, epochs=5, batch_size=32, verbose=0)
+
+    y_pred_att = att_model.predict(X_test)
+    mae_a, rmse_a, mape_a = compute_metrics(y_test, y_pred_att)
+
+    results.append(["Attention_LSTM", seq_len, units, lr, split, mae_a, rmse_a, mape_a])
+
+    # Save attention weights from last run
+    attention_layer = att_model.layers[-2]
+    weights = attention_layer.get_weights()
+    np.save("attention_weights.npy", weights)
+
+# ======================
+# 7. SAVE RESULTS
+# ======================
+results_df = pd.DataFrame(results, columns=[
+    "model_type", "seq_len", "units", "learning_rate", "train_split",
+    "MAE", "RMSE", "MAPE"
+])
+
 results_df.to_csv("results.csv", index=False)
 
-print("Training completed. Results saved to results.csv")
+print("\nAll experiments completed.")
+print("Files generated:")
+print("dataset.csv")
+print("results.csv")
+print("attention_weights.npy")

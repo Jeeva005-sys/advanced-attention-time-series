@@ -1,25 +1,23 @@
-Advanced Attention-based Time Series Forecasting
+1. Data Generation (5000 samples, 3 features)
 
-1. Baseline Model:
-We implemented a baseline ARIMA-style approach using classical time series modeling for comparison.
+2. Baseline Model (LSTM without attention)
+   Architecture:
+   - LSTM(32)
+   - Dense(1)
 
-2. Attention Model Architecture:
-An Encoder-Decoder LSTM with Attention mechanism was implemented. Encoder captures temporal dependencies while Attention dynamically weighs important time steps.
+3. Attention Model
+   Encoder-Decoder with Attention
 
-3. Hyperparameter Search:
-Grid search over:
-- Sequence length: 10, 20
-- LSTM units: 32, 64
-- Train split: 70%, 80%
+4. Hyperparameter Search Strategy
+   seq_len = [20,30]
+   units = [32,64]
+   lr = [0.001,0.0005]
 
-4. Metrics:
-MAE, RMSE, and MAPE were computed for each configuration.
+5. Quantitative Results Table
+   (copy from results.csv summary)
 
-5. Interpretability:
-Attention weights indicate which historical time steps contributed most to predictions, improving explainability over standard LSTM.
+6. Interpretability Analysis
+   Attention weights visualization and interpretation
 
-6. Results:
-Results are recorded in results.csv with full grid combinations.
-
-7. Conclusion:
-Attention-based models outperform baseline in accuracy and interpretability.
+7. Conclusion
+   Attention outperformed baseline by X% RMSE
